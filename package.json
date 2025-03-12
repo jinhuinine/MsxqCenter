@@ -3,11 +3,19 @@
   "version": "1.0.0",
   "description": "局域网位置数据同步系统",
   "main": "index.js",
+  "bin": "index.js",
+  "pkg": {
+    "targets": [
+      "node22-win-x64"
+    ],
+    "outputPath": "dist"
+  },
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
     "test": "jest",
-    "client-test": "node client-test.js"
+    "client-test": "node client-test.js",
+    "build": "pkg ."
   },
   "keywords": [
     "nodejs",
@@ -17,15 +25,15 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "express": "^4.18.2",
-    "ws": "^8.14.2",
-    "fastify": "^4.24.3"
+    "fastify": "^4.24.3",
+    "ws": "^8.14.2"
   },
   "devDependencies": {
     "jest": "^29.7.0",
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.1",
+    "pkg": "^5.8.1"
   },
   "engines": {
     "node": ">=16.0.0"
   }
-} 
+}

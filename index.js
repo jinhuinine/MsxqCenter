@@ -1,30 +1,34 @@
 // 局域网位置数据同步系统 - 主入口点 (安全版本)
-const fastify = require('fastify')({ logger: true });
+const http = require('http');
+const fastify = require('fastify')({ 
+  logger: true,
+  // 禁用 Fastify 的默认服务器，因为我们要在后面手动处理
+  serverFactory: (handler) => {
+    const server = http.createServer((req, res) => {
+      handler(req, res);
+    });
+    return server;
+  }
+});
+
 const WebSocket = require('ws');
 const os = require('os');
 const path = require('path');
-const http = require('http');
-
-// 创建HTTP服务器
-const server = http.createServer();
-
-// 创建WebSocket服务器
-const wss = new WebSocket.Server({ server });
 
 // 存储客户端连接 (使用Map而不是对象，更安全)
 const clients = new Map();
 
 // 获取本机IP地址
 function getLocalIP() {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
+const interfaces = os.networkInterfaces();
+for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
-      // 跳过非IPv4和内部IP
-      if (iface.family !== 'IPv4' || iface.internal !== false) continue;
-      return iface.address;
+    // 跳过非IPv4和内部IP
+    if (iface.family !== 'IPv4' || iface.internal !== false) continue;
+    return iface.address;
     }
-  }
-  return '127.0.0.1';
+}
+return '127.0.0.1';
 }
 
 const serverIP = getLocalIP();
@@ -37,6 +41,12 @@ function safeJsonParse(str) {
     return null;
   }
 }
+
+// 创建 WebSocket 服务器（使用 Fastify 的底层服务器）
+const wss = new WebSocket.Server({ 
+  // 不再创建新的 server，而是使用 noServer 选项
+  noServer: true
+});
 
 // WebSocket连接处理
 wss.on('connection', (ws, req) => {
@@ -167,10 +177,16 @@ fastify.get('/', async (request, reply) => {
   `;
 });
 
-// 启动服务器
+// 在 Fastify 启动之前，设置 WebSocket 升级处理
+fastify.server.on('upgrade', (request, socket, head) => {
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
+  });
+});
+
+// 修改启动部分
 const PORT = process.env.PORT || 3000;
 
-// 启动Fastify
 fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   if (err) {
     fastify.log.error(err);
@@ -179,6 +195,3 @@ fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   
   console.log(`位置同步服务器运行在 http://${serverIP}:${PORT}`);
 });
-
-// 将WebSocket服务器附加到同一端口
-server.listen(PORT); 
