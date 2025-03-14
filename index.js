@@ -1,34 +1,21 @@
-// 局域网位置数据同步系统 - 主入口点 (安全版本)
-const http = require('http');
-const fastify = require('fastify')({ 
-  logger: true,
-  // 禁用 Fastify 的默认服务器，因为我们要在后面手动处理
-  serverFactory: (handler) => {
-    const server = http.createServer((req, res) => {
-      handler(req, res);
-    });
-    return server;
-  }
-});
-
+// 局域网位置数据同步系统 - 简化版 (仅WebSocket)
 const WebSocket = require('ws');
 const os = require('os');
-const path = require('path');
 
-// 存储客户端连接 (使用Map而不是对象，更安全)
+// 存储客户端连接
 const clients = new Map();
 
 // 获取本机IP地址
 function getLocalIP() {
-const interfaces = os.networkInterfaces();
-for (const name of Object.keys(interfaces)) {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
-    // 跳过非IPv4和内部IP
-    if (iface.family !== 'IPv4' || iface.internal !== false) continue;
-    return iface.address;
+      // 跳过非IPv4和内部IP
+      if (iface.family !== 'IPv4' || iface.internal !== false) continue;
+      return iface.address;
     }
-}
-return '127.0.0.1';
+  }
+  return '127.0.0.1';
 }
 
 const serverIP = getLocalIP();
@@ -42,11 +29,11 @@ function safeJsonParse(str) {
   }
 }
 
-// 创建 WebSocket 服务器（使用 Fastify 的底层服务器）
-const wss = new WebSocket.Server({ 
-  // 不再创建新的 server，而是使用 noServer 选项
-  noServer: true
-});
+// 创建WebSocket服务器
+const PORT = process.env.PORT || 3000;
+const wss = new WebSocket.Server({ port: PORT });
+
+console.log(`位置同步服务器运行在 ws://${serverIP}:${PORT}`);
 
 // WebSocket连接处理
 wss.on('connection', (ws, req) => {
@@ -55,6 +42,12 @@ wss.on('connection', (ws, req) => {
                    req.socket.remoteAddress || '').replace(/^::ffff:/, '');
   
   console.log(`新客户端连接: ${clientIP}`);
+  
+  // 设置心跳检测
+  ws.isAlive = true;
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
   
   // 存储客户端连接
   clients.set(clientIP, ws);
@@ -96,16 +89,8 @@ wss.on('connection', (ws, req) => {
       return;
     }
     
-    //log收到的消息内容
-    console.log(`收到来自 ${data.clientIP} 的位置更新`);
-    console.log(`位置数据详情: ${JSON.stringify(data.transforms)}`);
-    
-    // 记录第一个变换矩阵的详细信息（如果存在）
-    if (data.transforms.length > 0) {
-      const firstTransform = data.transforms[0];
-      console.log(`首个变换矩阵ID: ${firstTransform.id}, 数据: [${firstTransform.data.join(', ')}]`);
-    }
-    console.log(`共收到 ${data.transforms.length} 个变换矩阵`);
+    // 记录收到的消息
+    console.log(`收到来自 ${data.clientIP} 的位置更新，共 ${data.transforms.length} 个变换矩阵`);
     
     // 创建广播消息
     const broadcastMessage = JSON.stringify({
@@ -121,7 +106,7 @@ wss.on('connection', (ws, req) => {
         try {
           client.send(broadcastMessage);
         } catch (error) {
-          console.error(`向客户端 ${ip} 发送消息失败,因为过滤相同IP:`, error);
+          console.error(`向客户端 ${ip} 发送消息失败:`, error);
         }
       }
     });
@@ -140,58 +125,29 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// 设置Fastify路由
-fastify.get('/', async (request, reply) => {
-  return `
-    <html>
-      <head>
-        <title>位置同步服务器</title>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-          body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
-          h1 { color: #333; }
-          .info { background-color: #f4f4f4; padding: 20px; border-radius: 5px; }
-          .clients { margin-top: 20px; }
-        </style>
-      </head>
-      <body>
-        <h1>位置同步服务器</h1>
-        <div class="info">
-          <p>服务器IP: ${serverIP}</p>
-          <p>WebSocket端口: ${PORT}</p>
-          <p>连接客户端数: ${clients.size}</p>
-        </div>
-        <div class="clients">
-          <h2>已连接客户端:</h2>
-          <ul id="clientList">
-            ${Array.from(clients.keys()).map(ip => `<li>${ip}</li>`).join('')}
-          </ul>
-        </div>
-        <script>
-          // 安全的自动刷新
-          setTimeout(() => location.reload(), 5000);
-        </script>
-      </body>
-    </html>
-  `;
-});
-
-// 在 Fastify 启动之前，设置 WebSocket 升级处理
-fastify.server.on('upgrade', (request, socket, head) => {
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit('connection', ws, request);
+// 心跳检测间隔
+const heartbeatInterval = setInterval(() => {
+  clients.forEach((ws, ip) => {
+    if (ws.isAlive === false) {
+      console.log(`客户端 ${ip} 心跳超时，断开连接`);
+      ws.terminate();
+      clients.delete(ip);
+      return;
+    }
+    
+    ws.isAlive = false;
+    ws.ping();
   });
-});
+}, 30000); // 30秒检查一次
 
-// 修改启动部分
-const PORT = process.env.PORT || 3000;
-
-fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
-  if (err) {
-    fastify.log.error(err);
-    process.exit(1);
-  }
+// 优雅关闭
+process.on('SIGINT', () => {
+  console.log('正在关闭服务器...');
   
-  console.log(`位置同步服务器运行在 http://${serverIP}:${PORT}`);
+  clearInterval(heartbeatInterval);
+  
+  wss.close(() => {
+    console.log('WebSocket服务器已关闭');
+    process.exit(0);
+  });
 });
